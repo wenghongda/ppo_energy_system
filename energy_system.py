@@ -78,7 +78,7 @@ class EnergySystem():
             self.pv_power_history = pv_power_prediction_history
             self.p_load_history = p_load_prediction_history
             self.wt_power_history = wt_prediction_power_history
-            self.fcv_h2_history = fcv_h2_prediction_m_history
+            self.fcv_h2_history = np.array(fcv_h2_prediction_m_history)/2
 
         elif self.flag == 'test':
             self.pv_power_history = pv_power_reality_history
@@ -88,18 +88,28 @@ class EnergySystem():
 
         self.reset()
     def step(self,action):
-        soc_bat,soc_h2,p_load, pv_power,wt_power,m_fcvs = self.state
-        #action = np.clip(action,action_min_limitation,action_max_limitation)
-        p_FC, p_EL, p_bat, e_buy = action
+        soc_bat,soc_h2,p_load, pv_power,wt_power,m_fcvs,time_step = self.state
+        soc_bat = round(soc_bat,4)
+        soc_h2 = round(soc_h2,4)
+        action = np.array(action)
 
+
+        p_bat, p_FC,p_EL = action[0],action[1],action[2]
+        #p_EL = p_EL.clip(0,n_EL)
+        #p_FC = p_h2 if p_h2 > 0 else 0
+        #p_EL = abs(p_h2) if p_h2 < 0 else 0
+
+        e_buy =-(pv_power + wt_power + p_FC + p_bat - p_EL - p_load)
+        e_buy = 0 if e_buy < 0 else e_buy
+        print("e_buy:{}".format(e_buy))
         soc_bat = soc_bat - (eta_charge * p_bat * freq)/self.c_bat
-        soc_h2 = self.calculate_new_h2_soc(p_EL,p_FC,m_fcvs)
-        new_p_load = self.p_load_history[self.time_step+1] if self.time_step!= 23 else 0
-        new_pv_power = self.pv_power_history[self.time_step+1] if self.time_step!= 23 else 0
-        new_wt_power = self.wt_power_history[self.time_step+1] if self.time_step!=23 else 0
-        new_m_fcvs = self.fcv_h2_history[self.time_step+1] if self.time_step != 23 else 0
-        costs = calculate_cost(pv_power,wt_power,p_FC,self.pre_p_FC,p_EL,self.pre_p_EL,p_bat,e_buy,p_load)
-        self.state = [soc_bat,soc_h2,new_p_load,new_pv_power,new_wt_power,new_m_fcvs]
+        soc_h2,delta_m= self.calculate_new_h2_soc(p_FC,p_EL,m_fcvs)
+        new_p_load = self.p_load_history[self.time_step+1] if self.time_step!= 23 else self.p_load_history[0]
+        new_pv_power = self.pv_power_history[self.time_step+1] if self.time_step!= 23 else self.pv_power_history[0]
+        new_wt_power = self.wt_power_history[self.time_step+1] if self.time_step!=23 else self.wt_power_history[0]
+        new_m_fcvs = self.fcv_h2_history[self.time_step+1] if self.time_step != 23 else self.fcv_h2_history[0]
+        costs = calculate_cost(self.time_step,pv_power,wt_power,p_FC,self.pre_p_FC,p_EL,self.pre_p_EL,p_bat,e_buy,soc_bat,soc_h2,delta_m,m_fcvs)
+        self.state = [soc_bat,soc_h2,new_p_load,new_pv_power,new_wt_power,new_m_fcvs,self.time_step+1]
         self.time_step += 1
         done = 1 if self.time_step == 24 else 0
         self.pre_p_FC = p_FC
@@ -117,22 +127,23 @@ class EnergySystem():
         self.m = self.V_h2 / (self.b + self.R * self.T /( self.h2_pressure_max * (self.H2_soc_history[0])))
         self.state = [self.bat_soc_history[0], self.H2_soc_history[0], self.p_load_history[0],
                       self.pv_power_history[0], self.wt_power_history[0],
-                      self.fcv_h2_history[0]]
+                      self.fcv_h2_history[0],self.time_step]
         return self.state
 
-    def calculate_new_h2_soc(self,p_EL,p_FC,m_fcvs):
+    def calculate_new_h2_soc(self,p_fc,p_el,m_fcvs):
+        # p_h2 donates the fuel cell power - electrolyser power
         b = self.b
         V = self.V_h2
-        m = self.m
         eta_EL = self.eta_EL
 
         R = self.R
         T = self.T
         freq = self.freq
         previous_soc_h2 = self.H2_soc_history[-1]
-
-        delta_m = 3600 * (freq * eta_EL * p_EL / LHV_h2 * 0.002 - freq * p_FC * 0.002 / (eta_FC * LHV_h2)) - m_fcvs
+        # 3600 represent 1 Wh = 3600 J
+        delta_m = 3600*0.002*(freq * eta_EL * p_el / LHV_h2-freq*p_fc/(eta_FC*LHV_h2)) - m_fcvs
+        print("delta_m:{}".format(delta_m))
         self.m += delta_m
-        self.soc_h2 = (previous_soc_h2 + R * T / h2_pressure_max \
-                       * (1 / (V / (m + delta_m) - b) - 1 / (V / m - b)))
-        return self.soc_h2
+        self.soc_h2 = R*T/((V/self.m)-b)/h2_pressure_max
+
+        return self.soc_h2, delta_m

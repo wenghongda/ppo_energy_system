@@ -1,26 +1,34 @@
 from parameters import *
-def calculate_cost(pv_power,wt_power,p_fc,pre_p_fc,p_el,pre_p_el,p_bat,e_buy,p_load):
-    carbon_cost = calculate_carbon(pv_power,wt_power,e_buy)
+import math
+def calculate_cost(time_step,pv_power,wt_power,p_fc,pre_p_fc,p_el,pre_p_el,p_bat,e_buy,soc_bat,soc_h2,delta_m,m_fcv):
+    carbon_cost = calculate_carbon(e_buy)
     carbon_cost = 0 if carbon_cost < 0 else carbon_cost
     degrade_cost = calculate_degrade(p_fc,pre_p_fc,p_el,pre_p_el,p_bat)
     degrade_cost = 0 if degrade_cost < 0 else degrade_cost
-    unbalance_penalty = calculate_unbalance_cost(pv_power,wt_power,p_fc,p_bat,e_buy,p_el,p_load)
-    print("carbon_cost:{}".format(carbon_cost))
-    print("degrade_cost:{}".format(degrade_cost))
-    print("unbalance_penalty:{}".format(unbalance_penalty))
-    total_cost = carbon_cost + degrade_cost-unbalance_penalty
-    reward = calculate_extra_reward(pv_power,wt_power,p_fc,p_el,p_bat,e_buy,p_load)
-    print("reward:{}".format(reward))
-    total_cost = -total_cost+reward
-    print(total_cost)
+    #carbon_cost = sigmoid(carbon_cost)
+    #degrade_cost = sigmoid(degrade_cost)
+    total_cost = -(carbon_cost + degrade_cost)
+    power_reward = calculate_power_reward(p_bat,p_fc,p_el,delta_m)
+    battery_soc_restriction_penalty = calculate_battery_soc_restriction_penalty(soc_bat)
+    h2_soc_restriction_penalty = calculate_h2_soc_restriction_penalty(soc_h2)
+    print("the carbon cost is :{}".format(-carbon_cost))
+    print("the degrade cost is :{}".format(-degrade_cost))
+    print("the total_cost is :{}".format(total_cost))
+
+    print("battery soc restriction penalty :{}".format(battery_soc_restriction_penalty))
+    print("h2 soc restriction penalty :{}".format(h2_soc_restriction_penalty))
+
+    total_cost =  h2_soc_restriction_penalty+ battery_soc_restriction_penalty + power_reward
+    print("overall reward function: {}".format(total_cost))
+    total_cost = round(total_cost,4)
     return total_cost
 
-def calculate_carbon(power_PV,power_WT,e_buy):
+
+
+def calculate_carbon(e_buy):
     c_co2 = e_buy # electricity bought from main grid; kwh
     P_CO2 = P_price # RMB/Kg
-    c_PV = co2_pv
-    c_WT = co2_wt
-    carbon_cost = P_CO2 * (c_G_buy * c_co2 + c_PV * power_PV*freq + c_WT * power_WT*freq)
+    carbon_cost = P_CO2 * c_G_buy * c_co2
     return carbon_cost
 
 def calculate_degrade(power_FC,FC_pre_power,power_EL,EL_pre_power,power_bat):
@@ -30,6 +38,9 @@ def calculate_degrade(power_FC,FC_pre_power,power_EL,EL_pre_power,power_bat):
     degrade_bat_cost = calculate_bat_degrade(power_bat)
     total_degrade_cost = degrade_FC_cost + degrade_EL_cost + degrade_bat_cost
     return total_degrade_cost
+def calculate_p_el_reward(p_el):
+    reward = min(p_el/n_EL,1)
+    return reward
 
 def calculate_FC_degrade(power_FC, pre_power):
     pre_delta = 1 if pre_power > 0 else 0
@@ -42,7 +53,6 @@ def calculate_FC_degrade(power_FC, pre_power):
     C_FC_chg = zeta_FC_chg * abs(power_FC - pre_power) * C_FC / (n_FC * V_FC_eol)
     C_FC_s = zeta_FC_s * abs(delta_FC - pre_delta) * C_FC / V_FC_eol
     C_FC_deg = C_FC_low + C_FC_high + C_FC_chg + C_FC_s
-
     return C_FC_deg
 
 def calculate_EL_degrade(power_EL,EL_pre_power):
@@ -66,14 +76,19 @@ def calculate_N_cycles(power):
 
     return N_cycles
 
-def calculate_unbalance_cost(p_pv,p_wt,p_fc,p_bat,p_buy,p_el,p_load):
-
-    penalty = 100 if abs(p_pv+p_wt+p_fc+p_bat+p_buy - (p_el+p_load)) > 1 else 0
-    return penalty
-def calculate_extra_reward(pv_power,wt_power,p_fc,p_el,p_bat,e_buy,p_load):
-    if 0 <= p_fc <= n_FC and -25 <= p_bat <= 25 and 0 <= p_el <= n_EL and abs(e_buy)<2000:
-        reward = 50
+def calculate_battery_soc_restriction_penalty(soc_bat):
+    bat_soc_reward = 1 if 0.4 < soc_bat < 0.7 else 0
+    return bat_soc_reward
+def calculate_h2_soc_restriction_penalty(soc_h2):
+    if 0.4 < soc_h2 < 0.7:
+        h2_soc_reward = 1.5
     else:
-        reward = 0
-
+        h2_soc_reward = 0
+    return h2_soc_reward
+def calculate_power_reward(p_bat,p_fc,p_el,delta_m):
+    reward =  1 if -25 < p_bat < 25 and 0 < p_fc < n_FC and 0 < p_el < n_EL else 0
+    reward = reward+1 if delta_m > -0.5 else reward
     return reward
+
+def sigmoid(x):
+    return 1/(1+math.exp(-x))

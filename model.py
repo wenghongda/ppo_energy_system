@@ -15,6 +15,7 @@ class Actor(nn.Module):
         self.mu = nn.Linear(64, N_A)
         self.mu.weight.data.mul_(0.1)
         self.mu.bias.data.mul_(0.0)
+
         self.set_init([self.fc1,self.fc2,self.fc3, self.mu, self.sigma])
         self.distribution = torch.distributions.Normal
 
@@ -32,6 +33,7 @@ class Actor(nn.Module):
         log_sigma = self.sigma(x)
         # log_sigma = torch.zeros_like(mu)
         sigma = torch.exp(log_sigma)
+
         return mu, sigma
 
     def choose_action(self, s):
@@ -46,9 +48,10 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
         self.fc1 = nn.Linear(N_S, 64)
         self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, 1)
-        self.fc3.weight.data.mul_(0.1)
-        self.fc3.bias.data.mul_(0.0)
+        self.fc3 = nn.Linear(64,64)
+        self.fc4 = nn.Linear(64, 1)
+        self.fc4.weight.data.mul_(0.1)
+        self.fc4.bias.data.mul_(0.0)
         # self.set_init([self.fc1, self.fc2, self.fc2])
 
     def set_init(self, layers):
@@ -59,6 +62,7 @@ class Critic(nn.Module):
     def forward(self, s):
         x = torch.tanh(self.fc1(s))
         x = torch.tanh(self.fc2(x))
-        values = self.fc3(x)
+        x = torch.tanh(self.fc3(x))
+        values = self.fc4(x)
 
         return values
